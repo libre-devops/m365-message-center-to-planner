@@ -1,3 +1,15 @@
+variable "cost_centre" {
+  description = "Cost centre tag applied to everything. Replace the placeholder with yours."
+  type        = string
+  default     = "1888/67"
+}
+
+variable "owner" {
+  description = "Owner tag applied to everything: the person or team accountable for the deployment. Replace the placeholder with yours."
+  type        = string
+  default     = "craig@craigthacker.dev"
+}
+
 variable "bucket_id" {
   description = "Planner bucket (board column) id the tickets land in, normally the To be discussed column. Find it with: mc.ps1 plans -Buckets (or mc.py plans --buckets)."
   type        = string
