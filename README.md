@@ -153,6 +153,29 @@ uv run mc.py messages --week this -o json   # raw Graph objects, for jq and frie
 uv run mc.py messages --week this -o ids    # just the MC ids, one per line
 ```
 
+## Windows quick start (no just, PowerShell only)
+
+The script needs PowerShell 7 (`pwsh`); from Windows PowerShell 5.1, prefix commands with
+`pwsh -NoProfile -File`. Set the environment once per session (or in `$PROFILE`):
+
+```powershell
+$env:MC_AUTH   = 'device'        # or 'interactive' if Conditional Access blocks device code
+$env:MC_TENANT = '<tenant id or domain>'
+$env:MC_PLAN_ID = '<planId>'     # once known; post then needs no -PlanId
+```
+
+Then the full surface, in PowerShell parameter style:
+
+```powershell
+.\mc.ps1 messages -Service xdr -Week this
+.\mc.ps1 messages -Service purview,azure -Month last -OutCsv messages.csv
+.\mc.ps1 summarise -Major -Month this -OutFile summary.md
+.\mc.ps1 plans -GroupName "Platform Team" -Buckets
+.\mc.ps1 post -Week last -DryRun
+.\mc.ps1 post -Week last
+.\mc.ps1 post -Month last -Rollup
+```
+
 ## Run it with just
 
 The justfile wraps the common runs. Set `MC_PLAN_ID` once (exported, or in a gitignored `.env`
