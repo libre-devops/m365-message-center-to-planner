@@ -19,6 +19,8 @@ column named **To be discussed** by default.
 
 ## Overview
 
+You should probably automate this with a Logic App, but this is for lazy quick tooling.
+
 A single-file Python (Typer) CLI that reads the Message Center and pushes filtered posts to
 Planner, so service changes actually get discussed instead of rotting in the admin center. Every
 Graph call goes through `az rest`, meaning the identity used is whoever is signed in to the Azure
