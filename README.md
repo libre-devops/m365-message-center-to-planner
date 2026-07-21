@@ -70,30 +70,74 @@ CLI: no app registration, no secrets, and your existing read access is exactly w
 
 ## Usage
 
+Prefix everything with `uv run` (dependencies resolve inline), or use the justfile below.
+
+### The Monday triage
+
+Find your board once, then put last week's posts on it as tasks, one per post, in the
+**To be discussed** column. Re-runs only add what is new, so this is safe as a weekly habit or a
+scheduled job:
+
 ```bash
-# Everything Defender XDR touched this week
-uv run mc.py messages -s xdr --week this
+uv run mc.py plans --group-name "Platform Team" --buckets   # note the plan id
+uv run mc.py post --plan-id <planId> --week last --dry-run  # preview first
+uv run mc.py post --plan-id <planId> --week last            # then for real
+```
 
-# All Purview and Azure messages last month, as JSON
-uv run mc.py messages -s purview -s azure --month last -o json
+Care about specific workloads only? Filters stack:
 
-# The same, as a CSV (Excel-friendly encoding; columns include services, dates, and a body extract)
+```bash
+uv run mc.py post --plan-id <planId> --week last -s xdr -s purview
+```
+
+### What changed, quickly
+
+```bash
+uv run mc.py messages -s xdr --week this                 # XDR movement this week
+uv run mc.py messages -s azure --month this --major      # major Azure changes this month
+uv run mc.py messages --severity critical --year 2026    # every critical post this year
+uv run mc.py messages -c prevent --day today             # fix-or-prevent issues landed today
+uv run mc.py messages -s "power platform" --month last   # no alias needed, substrings work
+```
+
+### Reports and exports
+
+```bash
+# Markdown rollup of last month, one file per team briefing
+uv run mc.py summarise --month last --out july.md
+
+# The action-required list is the part people actually miss: it is a section of every summary
+uv run mc.py summarise -s purview --year 2026
+
+# CSV for Excel or Power BI (services, dates, links, and a body extract per row)
 uv run mc.py messages -s purview -s azure --month last --out-csv messages.csv
 
-# Markdown summary of this month's major changes
-uv run mc.py summarise --major --month this --out summary.md
+# Or a single Planner task holding the whole month's summary, instead of one per post
+uv run mc.py post --plan-id <planId> --month last --rollup
+```
 
-# Find the plan and bucket ids for your team's board
-uv run mc.py plans --group-name "Platform Team" --buckets
+### Plumbing
 
-# One task per critical message this week, into the To be discussed column
-uv run mc.py post --plan-id <planId> --severity critical --week this
+```bash
+uv run mc.py messages --week this -o json   # raw Graph objects, for jq and friends
+uv run mc.py messages --week this -o ids    # just the MC ids, one per line
+```
 
-# A single rollup task holding the whole month's XDR summary
-uv run mc.py post --plan-id <planId> -s xdr --month this --rollup
+## Run it with just
 
-# See what would be created first
-uv run mc.py post --plan-id <planId> --week this --dry-run
+The justfile wraps the common runs. Set `MC_PLAN_ID` once (exported, or in a gitignored `.env`
+next to the justfile) and the posting recipes need no arguments at all:
+
+```bash
+just plans "Platform Team"        # find the plan id, put it in .env as MC_PLAN_ID=<id>
+just triage-dry                   # preview the Monday run
+just triage                       # last week's posts onto the board
+just triage -s xdr -s purview     # the same, XDR and Purview only
+just month-rollup                 # one task summarising last month
+just messages -s azure --week this
+just summarise --major --month this
+just csv xdr.csv -s xdr --week this
+just check                        # lint plus the same smoke CI runs
 ```
 
 ## Behaviour worth knowing
