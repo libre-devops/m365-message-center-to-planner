@@ -5,3 +5,7 @@ venv/
 summary.md
 *.csv
 .env
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfvars
+terraform/.terraform.lock.hcl

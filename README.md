@@ -19,7 +19,15 @@ column named **To be discussed** by default.
 
 ## Overview
 
-You should probably automate this with a Logic App, but this is for lazy quick tooling.
+You should probably automate this with a Logic App, but this is for lazy quick tooling. (And now
+there IS the Logic App: [`terraform/`](./terraform) deploys two consumption workflows, built from
+the Libre DevOps modules, that do this properly on timers: a daily sync raising one ticket per new
+message and a monthly rollup on the 1st, each with a system-assigned managed identity calling Graph
+directly, no secrets anywhere. Deploy it, run the two Graph app-role grant commands the outputs
+print, and the scripts become the ad-hoc companions they were always meant to be. Both proven live:
+the daily sync processed a 100-message backlog app-only without a single failure, and mind the
+`daily_lookback_days` variable: Message Center constantly re-touches old posts, so a wide lookback
+window means a wall of tickets, which is why it defaults to 2.)
 
 A single-file Python (Typer) CLI that reads the Message Center and pushes filtered posts to
 Planner, so service changes actually get discussed instead of rotting in the admin center. Every
