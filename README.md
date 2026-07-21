@@ -164,16 +164,64 @@ $env:MC_TENANT = '<tenant id or domain>'
 $env:MC_PLAN_ID = '<planId>'     # once known; post then needs no -PlanId
 ```
 
-Then the full surface, in PowerShell parameter style:
+### Signing in with device auth
+
+Device auth is selected with `-Auth device` on any command (or once via `$env:MC_AUTH = 'device'`,
+which every command then inherits; there is no standalone `-Device` flag). The first run prints
+something like:
+
+```
+To sign in, use a web browser to open the page https://microsoft.com/devicelogin
+and enter the code ABCD1234 to authenticate.
+```
+
+Open that page anywhere (your phone works), enter the code, approve as yourself, and the command
+continues on its own. The token, including a refresh token, is cached at
+`~/.config/m365-mc-planner/token-cache-ps.json`, so every later run in any window is silent until
+the refresh token expires; you only ever see the code prompt again after that. If the sign-in is
+rejected rather than completed, that is Conditional Access blocking device code: switch to
+`-Auth interactive` (a normal browser sign-in on this machine) and everything else stays the same.
+
+### Listing and filtering
 
 ```powershell
 .\mc.ps1 messages -Service xdr -Week this
+.\mc.ps1 messages -Service purview,azure -Month last
+.\mc.ps1 messages -Severity critical -Year 2026
+.\mc.ps1 messages -Category prevent -Day today
+.\mc.ps1 messages -Major -Month this
+.\mc.ps1 messages -Service "power platform" -Month last     # raw substring, no alias needed
+.\mc.ps1 messages -Service xdr -Week this -Auth device      # auth chosen inline instead of MC_AUTH
+```
+
+### Exports and summaries
+
+```powershell
 .\mc.ps1 messages -Service purview,azure -Month last -OutCsv messages.csv
-.\mc.ps1 summarise -Major -Month this -OutFile summary.md
-.\mc.ps1 plans -GroupName "Platform Team" -Buckets
-.\mc.ps1 post -Week last -DryRun
-.\mc.ps1 post -Week last
-.\mc.ps1 post -Month last -Rollup
+.\mc.ps1 messages -Service xdr -Week this -Output json      # raw Graph objects
+.\mc.ps1 messages -Service xdr -Week this -Output ids       # just MC ids, one per line
+.\mc.ps1 summarise -Month last -OutFile july.md
+.\mc.ps1 summarise -Major -Month this                        # to the console
+```
+
+### Posting to the board, and what -DryRun does
+
+`-DryRun` runs the entire command for real EXCEPT the writes: it reads the messages, reads the
+plan's existing tasks and buckets, applies the dedupe, then prints exactly what it WOULD create
+(`[dry-run] would create bucket ...`, `[dry-run] would create task: MC123456: ...`) and creates
+nothing. Nothing in Planner changes, so it is the safe way to preview a filter before committing,
+and a dry run followed by the same command without `-DryRun` produces exactly what the preview
+showed.
+
+```powershell
+.\mc.ps1 plans -GroupName "Platform Team" -Buckets           # find the plan id (needs Group.Read.All;
+                                                             # otherwise it is in the Planner board URL)
+.\mc.ps1 post -Week last -DryRun                             # preview: prints, writes nothing
+.\mc.ps1 post -Week last                                     # one task per post into "To be discussed"
+.\mc.ps1 post -Service xdr,purview -Week last                # scoped to specific services
+.\mc.ps1 post -Month last -Rollup                            # one summary task instead of one per post
+.\mc.ps1 post -Week last -BucketName "Radar"                 # a different column
+.\mc.ps1 post -PlanId <planId> -Week last                    # plan id inline instead of MC_PLAN_ID
 ```
 
 ## Run it with just
