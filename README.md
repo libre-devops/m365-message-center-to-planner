@@ -63,9 +63,12 @@ Both modes act as your signed-in user; there is no app registration and no secre
   Access policies block device-code sign-in (common in banks, since attackers love that flow): the
   same client and scopes, but a normal browser sign-in with a localhost redirect. Needs a browser
   reachable from where the script runs.
-- The `plans` command additionally needs `Group.Read.All`, which many tenants gate behind admin
-  consent. If that is refused, skip `plans`: the plan id is right there in the Planner board URL
-  (the value after `/plan/` or the `planId` query parameter), and nothing else needs group reads.
+- `plans` with no arguments lists YOUR plans (via `/me/planner/plans`), which is the only way to
+  find roster plans: the personal boards new Planner creates under My plans have no M365 group
+  behind them, so the `-GroupName`/`--group-name` lookup cannot see them (caught live). The group
+  lookup additionally needs `Group.Read.All`, which many tenants gate behind admin consent; the
+  no-argument form needs only the scopes the script already has. Failing everything, the plan id is
+  in the Planner board URL.
 
 ## Filters (shared by messages, summarise, and post)
 
@@ -91,6 +94,7 @@ style differs:
 | `uv run mc.py messages -s purview -s azure --month last --out-csv m.csv` | `./mc.ps1 messages -Service purview,azure -Month last -OutCsv m.csv` |
 | `uv run mc.py summarise --major --month this --out summary.md` | `./mc.ps1 summarise -Major -Month this -OutFile summary.md` |
 | `uv run mc.py post --plan-id <id> --week last --dry-run` | `./mc.ps1 post -PlanId <id> -Week last -DryRun` |
+| `uv run mc.py plans --buckets` | `./mc.ps1 plans -Buckets` |
 | `uv run mc.py plans --group-name "Team" --buckets` | `./mc.ps1 plans -GroupName "Team" -Buckets` |
 | `uv run mc.py --auth device messages ...` | `./mc.ps1 messages ... -Auth device` |
 
@@ -214,8 +218,8 @@ and a dry run followed by the same command without `-DryRun` produces exactly wh
 showed.
 
 ```powershell
-.\mc.ps1 plans -GroupName "Platform Team" -Buckets           # find the plan id (needs Group.Read.All;
-                                                             # otherwise it is in the Planner board URL)
+.\mc.ps1 plans -Buckets                                      # YOUR plans incl. roster boards (My plans)
+.\mc.ps1 plans -GroupName "Platform Team" -Buckets           # a group's plans (needs Group.Read.All)
 .\mc.ps1 post -Week last -DryRun                             # preview: prints, writes nothing
 .\mc.ps1 post -Week last                                     # one task per post into "To be discussed"
 .\mc.ps1 post -Service xdr,purview -Week last                # scoped to specific services

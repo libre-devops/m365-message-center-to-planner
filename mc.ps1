@@ -72,6 +72,7 @@ param(
     # plans
     [string]$GroupName,
     [switch]$Buckets,
+    [switch]$Mine,
 
     # auth
     [ValidateSet('az', 'device', 'interactive')]
@@ -339,6 +340,23 @@ function Get-GraphAll {
 
 # ---------------------------------------------------------------------------- filtering
 
+function ConvertTo-UtcDate {
+    # ConvertFrom-Json materialises ISO timestamps as [DateTime] (caught live), so date fields can
+    # arrive as DateTime or string depending on the auth path. Normalise both to UTC DateTime.
+    param($Value)
+    if ($null -eq $Value -or $Value -eq '') { return $null }
+    if ($Value -is [DateTime]) { return $Value.ToUniversalTime() }
+    return ([DateTimeOffset]::Parse([string]$Value, [Globalization.CultureInfo]::InvariantCulture)).UtcDateTime
+}
+
+function ConvertTo-IsoText {
+    param($Value, [switch]$DateOnly)
+    $d = ConvertTo-UtcDate $Value
+    if ($null -eq $d) { return '' }
+    if ($DateOnly) { return $d.ToString('yyyy-MM-dd') }
+    return $d.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")
+}
+
 function Limit-Text {
     param([string]$Text, [int]$Max)
     if ($Text -and $Text.Length -gt $Max) { return $Text.Substring(0, $Max) }
@@ -421,9 +439,8 @@ function Get-FilteredMessageSet {
         if ($Severity -and $m.severity -ne $Severity) { continue }
         if ($Major -and -not $m.isMajorChange) { continue }
         if ($period) {
-            $raw = $m.$DateField
-            if (-not $raw) { continue }
-            $when = ([DateTimeOffset]::Parse($raw)).UtcDateTime
+            $when = ConvertTo-UtcDate $m.$DateField
+            if ($null -eq $when) { continue }
             if ($when -lt $period.Start -or $when -ge $period.End) { continue }
         }
         $m
@@ -480,14 +497,13 @@ function Get-Summary {
     if ($action) {
         $lines += @('', '## Action required')
         foreach ($m in ($action | Sort-Object actionRequiredByDateTime)) {
-            $lines += "- $($m.id) due $($m.actionRequiredByDateTime.Substring(0,10)): $($m.title)"
+            $lines += "- $($m.id) due $(ConvertTo-IsoText $m.actionRequiredByDateTime -DateOnly): $($m.title)"
         }
     }
 
     $lines += @('', '## Messages')
     foreach ($m in $Messages) {
-        $when = if ($m.$DateField) { $m.$DateField.Substring(0, 10) } else { '' }
-        $lines += "- $($m.id) $when [$(($m.services ?? @()) -join ', ')] $($m.title)"
+        $lines += "- $($m.id) $(ConvertTo-IsoText $m.$DateField -DateOnly) [$(($m.services ?? @()) -join ', ')] $($m.title)"
     }
     return $lines -join "`n"
 }
@@ -528,7 +544,7 @@ function Invoke-MessageList {
         [pscustomobject]@{
             ID = $_.id
             Sev = $_.severity
-            Modified = if ($_.$DateField) { $_.$DateField.Substring(0, 10) } else { '' }
+            Modified = (ConvertTo-IsoText $_.$DateField -DateOnly)
             Services = ((($_.services ?? @()) -join ', ')[0..30] -join '')
             Title = (($_.title ?? '')[0..69] -join '')
         }
@@ -549,7 +565,20 @@ function Invoke-Summarise {
 }
 
 function Invoke-PlanList {
-    if (-not $GroupName) { throw 'plans needs -GroupName.' }
+    # Without -GroupName (or with -Mine), list the plans the signed-in user is a member of. This is
+    # the only way to find roster plans (new Planner "My plans"), which have no M365 group behind
+    # them and are invisible to the group lookup (caught live).
+    if ($Mine -or -not $GroupName) {
+        foreach ($p in (Get-GraphAll -Url "$script:GraphBase/me/planner/plans")) {
+            Write-Host "plan: $($p.title)  id: $($p.id)"
+            if ($Buckets) {
+                foreach ($b in (Get-GraphAll -Url "$script:GraphBase/planner/plans/$($p.id)/buckets")) {
+                    Write-Host "  bucket: $($b.name)  id: $($b.id)"
+                }
+            }
+        }
+        return
+    }
     $safe = $GroupName.Replace("'", "''")
     $groups = Get-GraphAll -Url "$script:GraphBase/groups?`$filter=displayName eq '$safe'&`$select=id,displayName"
     if (-not $groups) { throw "No group named '$GroupName' found (or no read access to it)." }
@@ -626,12 +655,12 @@ function Invoke-Post {
         $description = @(
             "Services: $(($m.services ?? @()) -join ', ')"
             "Category: $($m.category)  Severity: $($m.severity)  Major change: $([bool]$m.isMajorChange)"
-            "Last modified: $(if ($m.lastModifiedDateTime) { $m.lastModifiedDateTime.Substring(0,10) })"
+            "Last modified: $(ConvertTo-IsoText $m.lastModifiedDateTime -DateOnly)"
             "Admin center: $($script:AdminLink -f $m.id)"
             ''
             $bodyText
         ) -join "`n"
-        New-PlannerTask -Title $title -Description $description -Due $m.actionRequiredByDateTime
+        New-PlannerTask -Title $title -Description $description -Due (ConvertTo-IsoText $m.actionRequiredByDateTime)
         $created++
     }
     Write-Host "Done: $created created, $skipped already present." -ForegroundColor Green

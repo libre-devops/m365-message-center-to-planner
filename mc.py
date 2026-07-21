@@ -516,10 +516,17 @@ def summarise(
 
 @app.command()
 def plans(
-    group_name: str = typer.Option(..., "--group-name", "-g", help="Display name of the M365 group that owns the plan."),
+    group_name: Optional[str] = typer.Option(None, "--group-name", "-g", help="Display name of the M365 group that owns the plan. Omit to list YOUR plans instead, which is the only way to find roster plans (new Planner personal boards, no group behind them)."),
     buckets: bool = typer.Option(False, "--buckets", help="Also list each plan's buckets."),
 ):
-    """Find plan ids (and optionally bucket ids) for a group, to feed into post."""
+    """Find plan ids (and optionally bucket ids), from a group or from your own memberships."""
+    if group_name is None:
+        for p in graph_get_all(f"{GRAPH}/me/planner/plans"):
+            typer.echo(f"plan: {p['title']}  id: {p['id']}")
+            if buckets:
+                for b in graph_get_all(f"{GRAPH}/planner/plans/{p['id']}/buckets"):
+                    typer.echo(f"  bucket: {b['name']}  id: {b['id']}")
+        return
     safe = group_name.replace("'", "''")
     groups = graph_get_all(f"{GRAPH}/groups?$filter=displayName eq '{safe}'&$select=id,displayName")
     if not groups:
