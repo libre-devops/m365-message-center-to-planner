@@ -21,6 +21,12 @@ variable "loc" {
   default     = "uks"
 }
 
+variable "manage_graph_grants" {
+  description = "Manage the identities' Graph application role grants (ServiceMessage.Read.All, Tasks.ReadWrite.All) in this stack via the azuread role-assignment module. The applier then needs AppRoleAssignment.ReadWrite.All (Global Administrator works). Set false to skip them and use the az CLI commands from the grant_commands output instead."
+  type        = bool
+  default     = true
+}
+
 variable "plan_id" {
   description = "Planner plan id of the target board. Find it with: mc.ps1 plans -Buckets (or from the Planner board URL)."
   type        = string

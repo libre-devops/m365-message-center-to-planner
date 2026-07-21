@@ -92,6 +92,22 @@ module "logic_app_workflow" {
   }
 }
 
+# The identities' Graph APPLICATION roles, managed as code via the estate's azuread module: read
+# the Message Center, write Planner. Each grant IS tenant-wide admin consent, so the applier needs
+# AppRoleAssignment.ReadWrite.All; set manage_graph_grants = false to skip these and use the az CLI
+# commands from the grant_commands output instead.
+module "graph_grants" {
+  source  = "libre-devops/role-assignment/azuread"
+  version = "~> 4.2"
+
+  graph_app_role_grants = var.manage_graph_grants ? {
+    for name, identity in module.logic_app_workflow.identities : name => {
+      principal_object_id = identity.principal_id
+      role_names          = ["ServiceMessage.Read.All", "Tasks.ReadWrite.All"]
+    }
+  } : {}
+}
+
 # ------------------------------------------------------------------------------------------------
 # Daily workflow content (raw resources, per the standard). Chain: recurrence -> get recent
 # messages -> get the board's current task titles -> for each message, create the ticket only when

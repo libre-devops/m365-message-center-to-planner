@@ -136,27 +136,51 @@ State is local and gitignored; this is a personal-tenant stack, not a shared pip
 ### Grant the identities Graph access (one-time, admin)
 
 The workflows' identities need two Graph APPLICATION roles: `ServiceMessage.Read.All` (read the
-Message Center) and `Tasks.ReadWrite.All` (write Planner). Two ways, pick one:
+Message Center) and `Tasks.ReadWrite.All` (write Planner). The stack supports two routes; pick one
+and stay with it (a grant created one way makes the other way report it as already existing).
 
-- The apply prints ready-to-run `az rest` commands in the `grant_commands` output; run them as a
-  Global Administrator.
-- Or manage the grants as code with the
-  [`role-assignment`](https://registry.terraform.io/modules/libre-devops/role-assignment/azuread)
-  azuread module (4.2.0+), applied by someone holding `AppRoleAssignment.ReadWrite.All`:
+**Terraform, the default.** The stack manages the grants itself through the
+[`role-assignment`](https://registry.terraform.io/modules/libre-devops/role-assignment/azuread)
+azuread module (4.2.0+), so one apply by someone holding `AppRoleAssignment.ReadWrite.All` (Global
+Administrator works) deploys the workflows AND consents their permissions. The grants live in
+state, appear in every plan, and `terraform destroy` removes them with the identities:
 
-  ```hcl
-  module "graph_grants" {
-    source  = "libre-devops/role-assignment/azuread"
-    version = "~> 4.2"
+```bash
+terraform apply -var plan_id=<planId> -var bucket_id=<bucketId>
+```
 
-    graph_app_role_grants = {
-      for name, identity in module.logic_app_workflow.identities : name => {
-        principal_object_id = identity.principal_id
-        role_names          = ["ServiceMessage.Read.All", "Tasks.ReadWrite.All"]
-      }
+Under the hood it is one module block, names in, GUIDs never:
+
+```hcl
+module "graph_grants" {
+  source  = "libre-devops/role-assignment/azuread"
+  version = "~> 4.2"
+
+  graph_app_role_grants = {
+    for name, identity in module.logic_app_workflow.identities : name => {
+      principal_object_id = identity.principal_id
+      role_names          = ["ServiceMessage.Read.All", "Tasks.ReadWrite.All"]
     }
   }
-  ```
+}
+```
+
+**Azure CLI, the escape hatch.** When the person applying Terraform cannot hold
+`AppRoleAssignment.ReadWrite.All`, deploy without the grants and hand the printed commands to a
+Global Administrator:
+
+```bash
+terraform apply -var plan_id=<planId> -var bucket_id=<bucketId> -var manage_graph_grants=false
+terraform output grant_commands
+```
+
+Each printed command is a pair of Graph appRoleAssignments posts for one identity, of the form:
+
+```bash
+az rest --method POST \
+  --url https://graph.microsoft.com/v1.0/servicePrincipals/<workflow principal id>/appRoleAssignments \
+  --body '{"principalId":"<workflow principal id>","resourceId":"<tenant Graph SP object id>","appRoleId":"<app role id>"}'
+```
 
 ### Run it now instead of waiting for the timers
 

@@ -1,5 +1,5 @@
 output "grant_commands" {
-  description = "The two Graph APPLICATION role grants each workflow identity needs, ready to run as a Global Administrator (aka the one manual step)."
+  description = "The az CLI alternative to manage_graph_grants: the two Graph APPLICATION role grants each workflow identity needs, ready to run as a Global Administrator. Only needed when manage_graph_grants = false."
   value = [
     for name, identity in module.logic_app_workflow.identities : join(" ", [
       "az rest --method POST --url https://graph.microsoft.com/v1.0/servicePrincipals/${identity.principal_id}/appRoleAssignments",
@@ -18,4 +18,9 @@ output "workflow_ids" {
 output "workflow_principal_ids" {
   description = "Map of workflow name to its managed identity principal id."
   value       = { for name, identity in module.logic_app_workflow.identities : name => identity.principal_id }
+}
+
+output "graph_app_role_grant_ids" {
+  description = "The Terraform-managed Graph grants (empty when manage_graph_grants = false)."
+  value       = module.graph_grants.graph_app_role_grant_ids
 }
