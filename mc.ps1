@@ -77,7 +77,12 @@ param(
     # auth
     [ValidateSet('az', 'device', 'interactive')]
     [string]$Auth = $(if ($env:MC_AUTH) { $env:MC_AUTH } else { 'az' }),
-    [string]$Tenant = $(if ($env:MC_TENANT) { $env:MC_TENANT } else { 'organizations' })
+    [string]$Tenant = $(if ($env:MC_TENANT) { $env:MC_TENANT } else { 'organizations' }),
+    # The public client used for device/interactive sign-in. Defaults to the Microsoft Graph
+    # Command Line Tools app; override (or set MC_CLIENT_ID) when a tenant blocks that app with
+    # AADSTS50105 (assignment required) and permits another public client with the same delegated
+    # scopes instead.
+    [string]$ClientId = $(if ($env:MC_CLIENT_ID) { $env:MC_CLIENT_ID } else { '14d82eec-204b-4c2f-b7e8-296a70dab67e' })
 )
 
 # StrictMode 1.0, deliberately not Latest: the script consumes dynamic Graph JSON where properties
@@ -93,7 +98,6 @@ $script:AdminLink = 'https://admin.microsoft.com/#/MessageCenter/:/messages/{0}'
 # The Microsoft Graph Command Line Tools public client (the app Connect-MgGraph uses). Unlike the
 # Azure CLI's first-party app, it is allowed to request these delegated Graph scopes dynamically,
 # so device/interactive auth works where az scoped logins die with AADSTS65002.
-$script:GraphCliApp = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
 # Lean by design: Group.Read.All is deliberately NOT requested (it is admin-consent-gated in most
 # corporate tenants and only the -GroupName lookup needs it; plans with no arguments and everything
 # else run on Tasks.ReadWrite). Consent is all-or-nothing per sign-in, so one gated scope would
@@ -174,15 +178,18 @@ function Get-UserToken {
     # Cached token first, refreshed when stale.
     if (Test-Path $script:CachePath) {
         $cache = Get-Content $script:CachePath -Raw | ConvertFrom-Json
+        # A cached token only fits the client that minted it; a different -ClientId means a fresh
+        # sign-in rather than a doomed refresh.
+        if (($cache.client_id ?? '14d82eec-204b-4c2f-b7e8-296a70dab67e') -ne $ClientId) { $cache = $null }
         $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-        if ($cache.expires_on - 120 -gt $now) {
+        if ($cache -and $cache.expires_on - 120 -gt $now) {
             $script:McAccessToken = $cache.access_token
             return $script:McAccessToken
         }
-        if ($cache.refresh_token) {
+        if ($cache -and $cache.refresh_token) {
             try {
                 $r = Invoke-TokenEndpoint -Body @{
-                    client_id = $script:GraphCliApp; grant_type = 'refresh_token'
+                    client_id = $ClientId; grant_type = 'refresh_token'
                     refresh_token = $cache.refresh_token; scope = ($script:Scopes -join ' ')
                 }
                 if ($r.access_token) {
@@ -213,14 +220,14 @@ function Get-UserToken {
 
 function Get-TokenDeviceCode {
     $dc = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/devicecode" -Body @{
-        client_id = $script:GraphCliApp; scope = ($script:Scopes -join ' ')
+        client_id = $ClientId; scope = ($script:Scopes -join ' ')
     }
     Write-Host $dc.message -ForegroundColor Cyan
     $deadline = [DateTimeOffset]::UtcNow.AddSeconds([int]$dc.expires_in)
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         Start-Sleep -Seconds ([int]$dc.interval)
         $r = Invoke-TokenEndpoint -Body @{
-            client_id = $script:GraphCliApp
+            client_id = $ClientId
             grant_type = 'urn:ietf:params:oauth:grant-type:device_code'
             device_code = $dc.device_code
         }
@@ -246,7 +253,7 @@ function Get-TokenInteractive {
     $challenge = [Convert]::ToBase64String($sha).TrimEnd('=').Replace('+', '-').Replace('/', '_')
 
     $authUrl = "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/authorize" +
-    "?client_id=$script:GraphCliApp&response_type=code&redirect_uri=$([uri]::EscapeDataString($redirect))" +
+    "?client_id=$ClientId&response_type=code&redirect_uri=$([uri]::EscapeDataString($redirect))" +
     "&scope=$([uri]::EscapeDataString($script:Scopes -join ' '))" +
     "&code_challenge=$challenge&code_challenge_method=S256&prompt=select_account"
 
@@ -273,7 +280,7 @@ function Get-TokenInteractive {
     if (-not $code) { throw "Interactive sign-in failed: $err" }
 
     $r = Invoke-TokenEndpoint -Body @{
-        client_id = $script:GraphCliApp; grant_type = 'authorization_code'
+        client_id = $ClientId; grant_type = 'authorization_code'
         code = $code; redirect_uri = $redirect; code_verifier = $verifier
         scope = ($script:Scopes -join ' ')
     }

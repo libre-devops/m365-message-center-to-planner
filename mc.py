@@ -55,6 +55,7 @@ class Auth:
 
     mode = "az"
     tenant = "organizations"
+    client_id = GRAPH_CLI_APP
     _token: Optional[str] = None
 
 # Short names for the services people actually say, mapped to substrings matched (case-insensitive)
@@ -110,12 +111,19 @@ def _root(
         envvar="MC_TENANT",
         help="Tenant id or domain for device auth (device mode only).",
     ),
+    client_id: str = typer.Option(
+        GRAPH_CLI_APP,
+        "--client-id",
+        envvar="MC_CLIENT_ID",
+        help="Public client app id for device/interactive sign-in. Override when a tenant blocks the Microsoft Graph Command Line Tools app with AADSTS50105 (assignment required) and permits another public client with the same delegated scopes.",
+    ),
 ):
     if auth not in ("az", "device", "interactive"):
         typer.secho("--auth must be az, device, or interactive.", fg="red", err=True)
         raise typer.Exit(2)
     Auth.mode = auth
     Auth.tenant = tenant
+    Auth.client_id = client_id
 
 
 # ---------------------------------------------------------------------------- az plumbing
@@ -157,7 +165,7 @@ def _user_token() -> str:
     if TOKEN_CACHE.exists():
         cache.deserialize(TOKEN_CACHE.read_text())
     pca = msal.PublicClientApplication(
-        GRAPH_CLI_APP, authority=f"https://login.microsoftonline.com/{Auth.tenant}", token_cache=cache
+        Auth.client_id, authority=f"https://login.microsoftonline.com/{Auth.tenant}", token_cache=cache
     )
     result = None
     accounts = pca.get_accounts()

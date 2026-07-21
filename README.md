@@ -65,6 +65,14 @@ Both modes act as your signed-in user; there is no app registration and no secre
   Access policies block device-code sign-in (common in banks, since attackers love that flow): the
   same client and scopes, but a normal browser sign-in with a localhost redirect. Needs a browser
   reachable from where the script runs.
+- **AADSTS50105** ("configured to block users unless specifically granted access") means the tenant
+  requires per-user assignment on the Microsoft Graph Command Line Tools enterprise app, and the
+  signed-in user is not assigned. That gate is per client app, which is why other Graph tooling can
+  work while this refuses. Either request assignment to that app (MyApps or an admin), or point the
+  script at a public client the tenant does permit with `--client-id` / `-ClientId` /
+  `MC_CLIENT_ID`: any app registration with "allow public client flows" on, a `http://localhost`
+  redirect URI, and delegated `ServiceMessage.Read.All` + `Tasks.ReadWrite`. No secret is involved
+  either way; the sign-in is still you.
 - `plans` with no arguments lists YOUR plans (via `/me/planner/plans`), which is the only way to
   find roster plans: the personal boards new Planner creates under My plans have no M365 group
   behind them, so the `-GroupName`/`--group-name` lookup cannot see them (caught live). The sign-in
