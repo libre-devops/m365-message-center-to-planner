@@ -59,6 +59,10 @@ Both modes act as your signed-in user; there is no app registration and no secre
   refresh) is cached at `~/.config/m365-mc-planner/token-cache.json` so later runs are silent. Pass
   `--tenant <id or domain>` (or `MC_TENANT`) to pin the tenant. Your tenant's consent policy still
   applies: if user consent is restricted, the sign-in shows an admin approval flow instead.
+- **`--auth interactive`** (or `MC_AUTH=interactive`) is the fallback for tenants whose Conditional
+  Access policies block device-code sign-in (common in banks, since attackers love that flow): the
+  same client and scopes, but a normal browser sign-in with a localhost redirect. Needs a browser
+  reachable from where the script runs.
 - The `plans` command additionally needs `Group.Read.All`, which many tenants gate behind admin
   consent. If that is refused, skip `plans`: the plan id is right there in the Planner board URL
   (the value after `/plan/` or the `planId` query parameter), and nothing else needs group reads.

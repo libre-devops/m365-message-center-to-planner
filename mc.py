@@ -99,7 +99,7 @@ def _root(
         "az",
         "--auth",
         envvar="MC_AUTH",
-        help="az (reuse the Azure CLI identity) or device (device-code sign-in via the Microsoft Graph Command Line Tools public client; use this when az scoped logins fail with AADSTS65002).",
+        help="az (reuse the Azure CLI identity), device (device-code sign-in via the Microsoft Graph Command Line Tools public client; use when az mode 403s with AADSTS65002), or interactive (browser sign-in with the same client; use when Conditional Access blocks device code).",
     ),
     tenant: str = typer.Option(
         "organizations",
@@ -108,8 +108,8 @@ def _root(
         help="Tenant id or domain for device auth (device mode only).",
     ),
 ):
-    if auth not in ("az", "device"):
-        typer.secho("--auth must be az or device.", fg="red", err=True)
+    if auth not in ("az", "device", "interactive"):
+        typer.secho("--auth must be az, device, or interactive.", fg="red", err=True)
         raise typer.Exit(2)
     Auth.mode = auth
     Auth.tenant = tenant
@@ -143,8 +143,8 @@ def _az_rest(method: str, url: str, body: Optional[dict] = None, headers: Option
 
 
 
-def _device_token() -> str:
-    """Delegated token via the device-code flow, cached (with refresh) on disk between runs."""
+def _user_token() -> str:
+    """Delegated token via device-code or interactive browser sign-in, cached (with refresh) on disk."""
     if Auth._token:
         return Auth._token
     import msal
@@ -160,7 +160,9 @@ def _device_token() -> str:
     accounts = pca.get_accounts()
     if accounts:
         result = pca.acquire_token_silent(DEVICE_SCOPES, account=accounts[0])
-    if not result:
+    if not result and Auth.mode == "interactive":
+        result = pca.acquire_token_interactive(DEVICE_SCOPES, prompt="select_account")
+    elif not result:
         flow = pca.initiate_device_flow(scopes=DEVICE_SCOPES)
         if "user_code" not in flow:
             typer.secho(f"Could not start the device flow: {flow.get('error_description', flow)}", fg="red", err=True)
@@ -169,6 +171,8 @@ def _device_token() -> str:
         result = pca.acquire_token_by_device_flow(flow)
     if "access_token" not in result:
         typer.secho(f"Sign-in failed: {result.get('error_description', result.get('error'))}", fg="red", err=True)
+        if Auth.mode == "device":
+            typer.secho("If Conditional Access blocks device code sign-in, try: --auth interactive (or MC_AUTH=interactive).", fg="yellow", err=True)
         raise typer.Exit(1)
     if cache.has_state_changed:
         TOKEN_CACHE.write_text(cache.serialize())
@@ -197,7 +201,7 @@ def graph_call(method: str, url: str, body: Optional[dict] = None, headers: Opti
     """Call Graph with whichever identity source --auth selected."""
     if Auth.mode == "az":
         return _az_rest(method, url, body=body, headers=headers)
-    token = _device_token()
+    token = _user_token()
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, method=method.upper(), data=data)
     req.add_header("Authorization", f"Bearer {token}")
