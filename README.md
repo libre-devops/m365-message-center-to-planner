@@ -77,6 +77,9 @@ uv run mc.py messages -s xdr --week this
 # All Purview and Azure messages last month, as JSON
 uv run mc.py messages -s purview -s azure --month last -o json
 
+# The same, as a CSV (Excel-friendly encoding; columns include services, dates, and a body extract)
+uv run mc.py messages -s purview -s azure --month last --out-csv messages.csv
+
 # Markdown summary of this month's major changes
 uv run mc.py summarise --major --month this --out summary.md
 
@@ -104,3 +107,6 @@ uv run mc.py post --plan-id <planId> --week this --dry-run
   becomes the task due date when Microsoft set one.
 - The messages list is fetched in full (paged) and filtered locally, so combining filters never
   misses posts that Graph-side filtering would.
+- `--out-csv` on `messages` writes the filtered set as CSV (utf-8 with BOM, so Excel opens it
+  cleanly): id, title, category, severity, major-change flag, services, tags, the four timestamps,
+  the admin center deep link, and a plain-text body extract.

@@ -19,6 +19,7 @@ Commands:
 Run `mc.py <command> --help` for the filters each command takes.
 """
 
+import csv
 import datetime as dt
 import html
 import json
@@ -249,6 +250,36 @@ def strip_html(text: str, cap: int = 2000) -> str:
     return text[:cap] + (" ..." if len(text) > cap else "")
 
 
+CSV_FIELDS = [
+    "id", "title", "category", "severity", "isMajorChange", "services", "tags",
+    "lastModifiedDateTime", "startDateTime", "endDateTime", "actionRequiredByDateTime",
+    "adminCenterLink", "bodyText",
+]
+
+
+def write_csv(messages: List[dict], path: str) -> None:
+    """Write the filtered messages as CSV. utf-8-sig so Excel picks up the encoding on open."""
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(CSV_FIELDS)
+        for m in messages:
+            writer.writerow([
+                m.get("id", ""),
+                m.get("title", ""),
+                m.get("category", ""),
+                m.get("severity", ""),
+                bool(m.get("isMajorChange")),
+                "; ".join(m.get("services") or []),
+                "; ".join(m.get("tags") or []),
+                m.get("lastModifiedDateTime", ""),
+                m.get("startDateTime", ""),
+                m.get("endDateTime", ""),
+                m.get("actionRequiredByDateTime", ""),
+                ADMIN_LINK.format(id=m.get("id", "")),
+                strip_html((m.get("body") or {}).get("content") or "", cap=1000),
+            ])
+
+
 def build_summary(messages: List[dict], period, services, category, severity, date_field) -> str:
     label_bits = []
     if period:
@@ -321,11 +352,16 @@ def messages(
     date_field: str = OPT_DATE_FIELD,
     output: str = typer.Option("table", "--output", "-o", help="table, json, or ids."),
     limit: int = typer.Option(0, "--limit", help="Show at most this many rows (0 = all)."),
+    out_csv: Optional[str] = typer.Option(None, "--out-csv", help="Write the filtered messages to this CSV file instead of printing them."),
 ):
     """List Message Center posts with the chosen filters."""
     msgs, _ = fetch_filtered(service, category, severity, major, day, week, month, year, date_field)
     if limit:
         msgs = msgs[:limit]
+    if out_csv:
+        write_csv(msgs, out_csv)
+        typer.secho(f"Wrote {out_csv} ({len(msgs)} messages).", fg="green")
+        return
     if output == "json":
         typer.echo(json.dumps(msgs, indent=2))
         return
