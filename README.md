@@ -78,6 +78,26 @@ Both modes act as your signed-in user; there is no app registration and no secre
 - `--date-field`: which timestamp the time filters compare against (`lastModifiedDateTime` by
   default, or `startDateTime`).
 
+## Two engines, one tool
+
+The repo carries the same CLI twice: **`mc.py`** (Python, Typer) and **`mc.ps1`** (PowerShell 7,
+zero module dependencies, auth flows included), for machines where Python is not an option. Same
+commands, same filters, same behaviour, same token cache location conventions; only the argument
+style differs:
+
+| Python | PowerShell |
+|---|---|
+| `uv run mc.py messages -s xdr --week this` | `./mc.ps1 messages -Service xdr -Week this` |
+| `uv run mc.py messages -s purview -s azure --month last --out-csv m.csv` | `./mc.ps1 messages -Service purview,azure -Month last -OutCsv m.csv` |
+| `uv run mc.py summarise --major --month this --out summary.md` | `./mc.ps1 summarise -Major -Month this -OutFile summary.md` |
+| `uv run mc.py post --plan-id <id> --week last --dry-run` | `./mc.ps1 post -PlanId <id> -Week last -DryRun` |
+| `uv run mc.py plans --group-name "Team" --buckets` | `./mc.ps1 plans -GroupName "Team" -Buckets` |
+| `uv run mc.py --auth device messages ...` | `./mc.ps1 messages ... -Auth device` |
+
+Both honour `MC_AUTH`, `MC_TENANT`, and `MC_PLAN_ID` from the environment, so a `.env`/exports
+setup drives either engine unchanged. The examples below use the Python spelling; transpose per the
+table for PowerShell.
+
 ## Usage
 
 Prefix everything with `uv run` (dependencies resolve inline), or use the justfile below.
@@ -147,7 +167,8 @@ just month-rollup                 # one task summarising last month
 just messages -s azure --week this
 just summarise --major --month this
 just csv xdr.csv -s xdr --week this
-just check                        # lint plus the same smoke CI runs
+just ps messages -Service xdr -Week this   # the PowerShell twin, PS parameter style
+just check                        # lint both engines plus the same smoke CI runs
 ```
 
 ## Behaviour worth knowing

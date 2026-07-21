@@ -11,9 +11,14 @@ plan_id := env_var_or_default("MC_PLAN_ID", "")
 default:
     @just --list
 
-# Pass anything straight through to the CLI, e.g. just mc messages -s xdr --week this
+# Pass anything straight through to the Python CLI, e.g. just mc messages -s xdr --week this
 mc *args:
     uv run mc.py {{ args }}
+
+# The PowerShell twin, for machines without Python. PowerShell parameter style,
+# e.g. just ps messages -Service xdr -Week this
+ps *args:
+    pwsh -NoProfile -File ./mc.ps1 {{ args }}
 
 # List posts. Filters append, e.g. just messages -s purview --month last
 messages *args:
@@ -43,9 +48,10 @@ triage-dry *args:
 month-rollup *args:
     @if [ -z "{{ plan_id }}" ]; then echo 'Set MC_PLAN_ID (env or .env); find it with: just plans "Your Team Name"'; exit 1; fi; uv run mc.py post --plan-id "{{ plan_id }}" --month last --rollup {{ args }}
 
-# Ruff lint plus a help-render smoke of every command (what CI runs)
+# Lint plus a help-render smoke of both engines (what CI runs)
 check:
     uvx ruff check mc.py
     uv run mc.py --help > /dev/null
     for cmd in messages summarise post plans; do uv run mc.py "$cmd" --help > /dev/null; done
+    pwsh -NoProfile -File ./mc.ps1 help > /dev/null
     @echo "All good."
