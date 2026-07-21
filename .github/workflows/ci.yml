@@ -18,14 +18,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
 
       - name: Ruff lint
-        run: uvx ruff check mc.py
+        run: uvx ruff check debug/python/mc.py
 
       - name: CLI parses and renders help
         run: |
           set -euo pipefail
-          uv run mc.py --help
+          uv run debug/python/mc.py --help
           for cmd in messages summarise post plans; do
-            uv run mc.py "$cmd" --help >/dev/null
+            uv run debug/python/mc.py "$cmd" --help >/dev/null
           done
 
       - name: PSScriptAnalyzer (mc.ps1)
@@ -33,7 +33,7 @@ jobs:
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module PSScriptAnalyzer -MinimumVersion 1.21.0 -Force -Scope CurrentUser
-          $results = Invoke-ScriptAnalyzer -Path ./mc.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
+          $results = Invoke-ScriptAnalyzer -Path ./debug/powershell/mc.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
           if ($results) { $results | Format-Table -AutoSize | Out-String | Write-Host }
           $errors = @($results | Where-Object { $_.Severity -eq 'Error' })
           if ($errors.Count -gt 0) { throw "PSScriptAnalyzer found $($errors.Count) error(s)." }
@@ -42,5 +42,5 @@ jobs:
       - name: PowerShell twin parses and renders help
         shell: pwsh
         run: |
-          ./mc.ps1 help | Out-Null
+          ./debug/powershell/mc.ps1 help | Out-Null
           Write-Host "mc.ps1: OK"

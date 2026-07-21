@@ -19,15 +19,11 @@ column named **To be discussed** by default.
 
 ## Overview
 
-You should probably automate this with a Logic App, but this is for lazy quick tooling. (And now
-there IS the Logic App: [`terraform/`](./terraform) deploys two consumption workflows, built from
-the Libre DevOps modules, that do this properly on timers: a daily sync raising one ticket per new
-message and a monthly rollup on the 1st, each with a system-assigned managed identity calling Graph
-directly, no secrets anywhere. Deploy it, run the two Graph app-role grant commands the outputs
-print, and the scripts become the ad-hoc companions they were always meant to be. Both proven live:
-the daily sync processed a 100-message backlog app-only without a single failure, and mind the
-`daily_lookback_days` variable: Message Center constantly re-touches old posts, so a wide lookback
-window means a wall of tickets, which is why it defaults to 2.)
+You should probably automate this with a Logic App, but this is for lazy quick tooling. And now
+there IS the Logic App: see [The Logic App](#the-logic-app-the-real-automation) below. The repo
+splits accordingly: [`terraform/`](./terraform) is the automation, and the scripts live under
+[`debug/python/`](./debug/python) and [`debug/powershell/`](./debug/powershell) as the ad-hoc,
+debugging, and one-off-export companions they were always meant to be.
 
 A single-file Python (Typer) CLI that reads the Message Center and pushes filtered posts to
 Planner, so service changes actually get discussed instead of rotting in the admin center. Every
@@ -47,7 +43,7 @@ CLI: no app registration, no secrets, and your existing read access is exactly w
 ## Requirements
 
 - [`uv`](https://github.com/astral-sh/uv): the script carries inline dependency metadata, so
-  `uv run mc.py` resolves its dependencies on the fly.
+  `uv run debug/python/mc.py` resolves its dependencies on the fly.
 - Reading messages: a Message Center capable admin role on your account (Message Center Reader is
   enough; Global Reader also works).
 - Posting to Planner: membership of the M365 group that owns the target plan.
@@ -102,6 +98,82 @@ Both modes act as your signed-in user; there is no app registration and no secre
 - `--date-field`: which timestamp the time filters compare against (`lastModifiedDateTime` by
   default, or `startDateTime`).
 
+## The Logic App (the real automation)
+
+[`terraform/`](./terraform) deploys the production version: two consumption Logic App workflows
+built from the Libre DevOps registry modules (`rg`, `tags`, `logic-app-workflow`), each with a
+system-assigned managed identity calling Microsoft Graph over raw HTTP. No API connections, no app
+registrations, no secrets anywhere in the design; the only credentials that exist are the managed
+identities themselves.
+
+- **`logic-...-mc-001`, daily at 07:00 UTC**: fetches messages whose `lastModifiedDateTime` falls
+  inside the lookback window, and raises ONE Planner ticket per message that has no ticket yet
+  (dedupe by the MC id prefix in the task title, same contract as the scripts, so scripts and
+  workflow can share a board without double-posting). Tickets carry the services, category,
+  severity, admin center deep link, and Microsoft's action-required date as the due date.
+- **`logic-...-mc-002`, monthly on the 1st at 06:00 UTC**: raises a single rollup ticket titled
+  `Message Center rollup: <yyyy-MM> (N messages)` for the previous calendar month, with a one line
+  per message summary in the description. The title doubles as the dedupe key, so reruns inside a
+  month are no-ops.
+
+Both proven live: the daily sync processed a 100-message backlog app-only without a single failure
+(including against a roster plan, which application-permission Planner writes do support), and the
+monthly rollup landed alongside it.
+
+### Deploy
+
+```bash
+cd terraform
+az login                                                  # an account able to create the rg and workflows
+export ARM_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+terraform init
+terraform apply -var plan_id=<planId> -var bucket_id=<bucketId>
+```
+
+`plan_id` and `bucket_id` come from `plans -Buckets` in either script (or the Planner board URL).
+State is local and gitignored; this is a personal-tenant stack, not a shared pipeline.
+
+### Grant the identities Graph access (one-time, admin)
+
+The workflows' identities need two Graph APPLICATION roles: `ServiceMessage.Read.All` (read the
+Message Center) and `Tasks.ReadWrite.All` (write Planner). Two ways, pick one:
+
+- The apply prints ready-to-run `az rest` commands in the `grant_commands` output; run them as a
+  Global Administrator.
+- Or manage the grants as code with the
+  [`role-assignment`](https://registry.terraform.io/modules/libre-devops/role-assignment/azuread)
+  azuread module (4.2.0+), applied by someone holding `AppRoleAssignment.ReadWrite.All`:
+
+  ```hcl
+  module "graph_grants" {
+    source  = "libre-devops/role-assignment/azuread"
+    version = "~> 4.2"
+
+    graph_app_role_grants = {
+      for name, identity in module.logic_app_workflow.identities : name => {
+        principal_object_id = identity.principal_id
+        role_names          = ["ServiceMessage.Read.All", "Tasks.ReadWrite.All"]
+      }
+    }
+  }
+  ```
+
+### Run it now instead of waiting for the timers
+
+```bash
+az rest --method POST --url "https://management.azure.com<workflowId>/triggers/<triggerName>/run?api-version=2016-06-01"
+# trigger names: Recurrence_-_Every_day_at_07_00_UTC and Recurrence_-_First_of_the_month_at_06_00_UTC
+```
+
+### Tuning and costs
+
+`daily_lookback_days` defaults to 2, and the default matters: Message Center constantly re-touches
+old posts, so a wide `lastModifiedDateTime` window is close to the entire active feed (a 30-day
+window pulled ~100 messages in testing) and means a wall of tickets on first run. The dedupe makes
+any overlap safe, so keep the window small and let daily runs accumulate. Consumption workflows
+bill per action execution; this design costs pennies per month. `terraform destroy` removes
+everything, including the identities (and with them the grants).
+
 ## Two engines, one tool
 
 The repo carries the same CLI twice: **`mc.py`** (Python, Typer) and **`mc.ps1`** (PowerShell 7,
@@ -111,13 +183,13 @@ style differs:
 
 | Python | PowerShell |
 |---|---|
-| `uv run mc.py messages -s xdr --week this` | `./mc.ps1 messages -Service xdr -Week this` |
-| `uv run mc.py messages -s purview -s azure --month last --out-csv m.csv` | `./mc.ps1 messages -Service purview,azure -Month last -OutCsv m.csv` |
-| `uv run mc.py summarise --major --month this --out summary.md` | `./mc.ps1 summarise -Major -Month this -OutFile summary.md` |
-| `uv run mc.py post --plan-id <id> --week last --dry-run` | `./mc.ps1 post -PlanId <id> -Week last -DryRun` |
-| `uv run mc.py plans --buckets` | `./mc.ps1 plans -Buckets` |
-| `uv run mc.py plans --group-name "Team" --buckets` | `./mc.ps1 plans -GroupName "Team" -Buckets` |
-| `uv run mc.py --auth device messages ...` | `./mc.ps1 messages ... -Auth device` |
+| `uv run debug/python/mc.py messages -s xdr --week this` | `./debug/powershell/mc.ps1 messages -Service xdr -Week this` |
+| `uv run debug/python/mc.py messages -s purview -s azure --month last --out-csv m.csv` | `./debug/powershell/mc.ps1 messages -Service purview,azure -Month last -OutCsv m.csv` |
+| `uv run debug/python/mc.py summarise --major --month this --out summary.md` | `./debug/powershell/mc.ps1 summarise -Major -Month this -OutFile summary.md` |
+| `uv run debug/python/mc.py post --plan-id <id> --week last --dry-run` | `./debug/powershell/mc.ps1 post -PlanId <id> -Week last -DryRun` |
+| `uv run debug/python/mc.py plans --buckets` | `./debug/powershell/mc.ps1 plans -Buckets` |
+| `uv run debug/python/mc.py plans --group-name "Team" --buckets` | `./debug/powershell/mc.ps1 plans -GroupName "Team" -Buckets` |
+| `uv run debug/python/mc.py --auth device messages ...` | `./debug/powershell/mc.ps1 messages ... -Auth device` |
 
 Both honour `MC_AUTH`, `MC_TENANT`, and `MC_PLAN_ID` from the environment, so a `.env`/exports
 setup drives either engine unchanged. The examples below use the Python spelling; transpose per the
@@ -134,48 +206,48 @@ Find your board once, then put last week's posts on it as tasks, one per post, i
 scheduled job:
 
 ```bash
-uv run mc.py plans --group-name "Platform Team" --buckets   # note the plan id
-uv run mc.py post --plan-id <planId> --week last --dry-run  # preview first
-uv run mc.py post --plan-id <planId> --week last            # then for real
+uv run debug/python/mc.py plans --group-name "Platform Team" --buckets   # note the plan id
+uv run debug/python/mc.py post --plan-id <planId> --week last --dry-run  # preview first
+uv run debug/python/mc.py post --plan-id <planId> --week last            # then for real
 ```
 
 Care about specific workloads only? Filters stack:
 
 ```bash
-uv run mc.py post --plan-id <planId> --week last -s xdr -s purview
+uv run debug/python/mc.py post --plan-id <planId> --week last -s xdr -s purview
 ```
 
 ### What changed, quickly
 
 ```bash
-uv run mc.py messages -s xdr --week this                 # XDR movement this week
-uv run mc.py messages -s azure --month this --major      # major Azure changes this month
-uv run mc.py messages --severity critical --year 2026    # every critical post this year
-uv run mc.py messages -c prevent --day today             # fix-or-prevent issues landed today
-uv run mc.py messages -s "power platform" --month last   # no alias needed, substrings work
+uv run debug/python/mc.py messages -s xdr --week this                 # XDR movement this week
+uv run debug/python/mc.py messages -s azure --month this --major      # major Azure changes this month
+uv run debug/python/mc.py messages --severity critical --year 2026    # every critical post this year
+uv run debug/python/mc.py messages -c prevent --day today             # fix-or-prevent issues landed today
+uv run debug/python/mc.py messages -s "power platform" --month last   # no alias needed, substrings work
 ```
 
 ### Reports and exports
 
 ```bash
 # Markdown rollup of last month, one file per team briefing
-uv run mc.py summarise --month last --out july.md
+uv run debug/python/mc.py summarise --month last --out july.md
 
 # The action-required list is the part people actually miss: it is a section of every summary
-uv run mc.py summarise -s purview --year 2026
+uv run debug/python/mc.py summarise -s purview --year 2026
 
 # CSV for Excel or Power BI (services, dates, links, and a body extract per row)
-uv run mc.py messages -s purview -s azure --month last --out-csv messages.csv
+uv run debug/python/mc.py messages -s purview -s azure --month last --out-csv messages.csv
 
 # Or a single Planner task holding the whole month's summary, instead of one per post
-uv run mc.py post --plan-id <planId> --month last --rollup
+uv run debug/python/mc.py post --plan-id <planId> --month last --rollup
 ```
 
 ### Plumbing
 
 ```bash
-uv run mc.py messages --week this -o json   # raw Graph objects, for jq and friends
-uv run mc.py messages --week this -o ids    # just the MC ids, one per line
+uv run debug/python/mc.py messages --week this -o json   # raw Graph objects, for jq and friends
+uv run debug/python/mc.py messages --week this -o ids    # just the MC ids, one per line
 ```
 
 ## Windows quick start (no just, PowerShell only)
