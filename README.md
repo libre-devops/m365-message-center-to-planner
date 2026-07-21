@@ -176,7 +176,7 @@ everything, including the identities (and with them the grants).
 
 ## Two engines, one tool
 
-The repo carries the same CLI twice: **`mc.py`** (Python, Typer) and **`mc.ps1`** (PowerShell 7,
+The repo carries the same CLI twice: **`debug/python/mc.py`** (Python, Typer) and **`debug/powershell/mc.ps1`** (PowerShell 7,
 zero module dependencies, auth flows included), for machines where Python is not an option. Same
 commands, same filters, same behaviour, same token cache location conventions; only the argument
 style differs:
@@ -282,23 +282,23 @@ rejected rather than completed, that is Conditional Access blocking device code:
 ### Listing and filtering
 
 ```powershell
-.\mc.ps1 messages -Service xdr -Week this
-.\mc.ps1 messages -Service purview,azure -Month last
-.\mc.ps1 messages -Severity critical -Year 2026
-.\mc.ps1 messages -Category prevent -Day today
-.\mc.ps1 messages -Major -Month this
-.\mc.ps1 messages -Service "power platform" -Month last     # raw substring, no alias needed
-.\mc.ps1 messages -Service xdr -Week this -Auth device      # auth chosen inline instead of MC_AUTH
+.\debug\powershell\mc.ps1 messages -Service xdr -Week this
+.\debug\powershell\mc.ps1 messages -Service purview,azure -Month last
+.\debug\powershell\mc.ps1 messages -Severity critical -Year 2026
+.\debug\powershell\mc.ps1 messages -Category prevent -Day today
+.\debug\powershell\mc.ps1 messages -Major -Month this
+.\debug\powershell\mc.ps1 messages -Service "power platform" -Month last     # raw substring, no alias needed
+.\debug\powershell\mc.ps1 messages -Service xdr -Week this -Auth device      # auth chosen inline instead of MC_AUTH
 ```
 
 ### Exports and summaries
 
 ```powershell
-.\mc.ps1 messages -Service purview,azure -Month last -OutCsv messages.csv
-.\mc.ps1 messages -Service xdr -Week this -Output json      # raw Graph objects
-.\mc.ps1 messages -Service xdr -Week this -Output ids       # just MC ids, one per line
-.\mc.ps1 summarise -Month last -OutFile july.md
-.\mc.ps1 summarise -Major -Month this                        # to the console
+.\debug\powershell\mc.ps1 messages -Service purview,azure -Month last -OutCsv messages.csv
+.\debug\powershell\mc.ps1 messages -Service xdr -Week this -Output json      # raw Graph objects
+.\debug\powershell\mc.ps1 messages -Service xdr -Week this -Output ids       # just MC ids, one per line
+.\debug\powershell\mc.ps1 summarise -Month last -OutFile july.md
+.\debug\powershell\mc.ps1 summarise -Major -Month this                        # to the console
 ```
 
 ### Posting to the board, and what -DryRun does
@@ -311,14 +311,14 @@ and a dry run followed by the same command without `-DryRun` produces exactly wh
 showed.
 
 ```powershell
-.\mc.ps1 plans -Buckets                                      # YOUR plans incl. roster boards (My plans)
-.\mc.ps1 plans -GroupName "Platform Team" -Buckets           # a group's plans (needs Group.Read.All)
-.\mc.ps1 post -Week last -DryRun                             # preview: prints, writes nothing
-.\mc.ps1 post -Week last                                     # one task per post into "To be discussed"
-.\mc.ps1 post -Service xdr,purview -Week last                # scoped to specific services
-.\mc.ps1 post -Month last -Rollup                            # one summary task instead of one per post
-.\mc.ps1 post -Week last -BucketName "Radar"                 # a different column
-.\mc.ps1 post -PlanId <planId> -Week last                    # plan id inline instead of MC_PLAN_ID
+.\debug\powershell\mc.ps1 plans -Buckets                                      # YOUR plans incl. roster boards (My plans)
+.\debug\powershell\mc.ps1 plans -GroupName "Platform Team" -Buckets           # a group's plans (needs Group.Read.All)
+.\debug\powershell\mc.ps1 post -Week last -DryRun                             # preview: prints, writes nothing
+.\debug\powershell\mc.ps1 post -Week last                                     # one task per post into "To be discussed"
+.\debug\powershell\mc.ps1 post -Service xdr,purview -Week last                # scoped to specific services
+.\debug\powershell\mc.ps1 post -Month last -Rollup                            # one summary task instead of one per post
+.\debug\powershell\mc.ps1 post -Week last -BucketName "Radar"                 # a different column
+.\debug\powershell\mc.ps1 post -PlanId <planId> -Week last                    # plan id inline instead of MC_PLAN_ID
 ```
 
 ## Run it with just
