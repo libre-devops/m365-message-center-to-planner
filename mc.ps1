@@ -94,7 +94,11 @@ $script:AdminLink = 'https://admin.microsoft.com/#/MessageCenter/:/messages/{0}'
 # Azure CLI's first-party app, it is allowed to request these delegated Graph scopes dynamically,
 # so device/interactive auth works where az scoped logins die with AADSTS65002.
 $script:GraphCliApp = '14d82eec-204b-4c2f-b7e8-296a70dab67e'
-$script:Scopes = @('ServiceMessage.Read.All', 'Tasks.ReadWrite', 'Group.Read.All', 'offline_access')
+# Lean by design: Group.Read.All is deliberately NOT requested (it is admin-consent-gated in most
+# corporate tenants and only the -GroupName lookup needs it; plans with no arguments and everything
+# else run on Tasks.ReadWrite). Consent is all-or-nothing per sign-in, so one gated scope would
+# block the lot.
+$script:Scopes = @('ServiceMessage.Read.All', 'Tasks.ReadWrite', 'offline_access')
 $script:CachePath = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.config/m365-mc-planner/token-cache-ps.json'
 
 # Short names for the services people actually say, matched (case-insensitive) as substrings

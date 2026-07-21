@@ -43,7 +43,10 @@ ADMIN_LINK = "https://admin.microsoft.com/#/MessageCenter/:/messages/{id}"
 # so device auth works where az scoped logins die with AADSTS65002 (Microsoft first-party apps can
 # only request scopes Microsoft preauthorized for them, and these are not among the Azure CLI's).
 GRAPH_CLI_APP = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
-DEVICE_SCOPES = ["ServiceMessage.Read.All", "Tasks.ReadWrite", "Group.Read.All"]
+# Lean by design: Group.Read.All is deliberately NOT requested (admin-consent-gated in most
+# corporate tenants, and only the group-name lookup needs it; plans with no arguments and everything
+# else run on Tasks.ReadWrite). Consent is all-or-nothing per sign-in.
+DEVICE_SCOPES = ["ServiceMessage.Read.All", "Tasks.ReadWrite"]
 TOKEN_CACHE = Path.home() / ".config" / "m365-mc-planner" / "token-cache.json"
 
 

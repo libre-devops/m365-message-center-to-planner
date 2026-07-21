@@ -67,10 +67,13 @@ Both modes act as your signed-in user; there is no app registration and no secre
   reachable from where the script runs.
 - `plans` with no arguments lists YOUR plans (via `/me/planner/plans`), which is the only way to
   find roster plans: the personal boards new Planner creates under My plans have no M365 group
-  behind them, so the `-GroupName`/`--group-name` lookup cannot see them (caught live). The group
-  lookup additionally needs `Group.Read.All`, which many tenants gate behind admin consent; the
-  no-argument form needs only the scopes the script already has. Failing everything, the plan id is
-  in the Planner board URL.
+  behind them, so the `-GroupName`/`--group-name` lookup cannot see them (caught live). The sign-in
+  deliberately requests only `ServiceMessage.Read.All` and `Tasks.ReadWrite`: `Group.Read.All`
+  (needed only by the group-name lookup) is admin-consent-gated in most corporate tenants, and
+  consent is all-or-nothing per sign-in, so requesting it could block everything else. The group
+  lookup will therefore 403 in device/interactive mode unless your admins have consented that scope
+  to the Microsoft Graph Command Line Tools app; use the no-argument form or take the plan id from
+  the Planner board URL.
 
 ## Filters (shared by messages, summarise, and post)
 
