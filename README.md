@@ -66,7 +66,7 @@ Both modes act as your signed-in user; there is no app registration and no secre
   `--tenant <id or domain>` (or `MC_TENANT`) to pin the tenant. Your tenant's consent policy still
   applies: if user consent is restricted, the sign-in shows an admin approval flow instead.
 - **`--auth interactive`** (or `MC_AUTH=interactive`) is the fallback for tenants whose Conditional
-  Access policies block device-code sign-in (common in banks, since attackers love that flow): the
+  Access policies block device-code sign-in (common in hardened tenants, since attackers love that flow): the
   same client and scopes, but a normal browser sign-in with a localhost redirect. Needs a browser
   reachable from where the script runs.
 - **AADSTS50105** ("configured to block users unless specifically granted access") means the tenant

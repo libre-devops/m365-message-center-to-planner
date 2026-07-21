@@ -2,18 +2,18 @@
 # should probably automate this with a Logic App". Two consumption workflows, each with a
 # system-assigned managed identity calling Microsoft Graph directly (no API connections, no
 # secrets):
-#   logic-...-mc-001  daily:   pull recently touched Message Center messages and raise ONE Planner
-#                              ticket per message (each area of concern gets one ticket), deduped
-#                              against the board by the MC id prefix in the task title.
-#   logic-...-mc-002  monthly: on the 1st, raise a single rollup ticket summarising last month.
+#   logic-...-mc-daily:   pull recently touched Message Center messages and raise ONE Planner
+#                         ticket per message (each area of concern gets one ticket), deduped
+#                         against the board by the MC id prefix in the task title.
+#   logic-...-mc-monthly: on the 1st, raise a single rollup ticket summarising last month.
 # The identities need two Graph APPLICATION roles granted after apply (ServiceMessage.Read.All,
 # Tasks.ReadWrite.All); the grant commands are in the terraform outputs. Blocks are ordered by
 # dependency, top to bottom.
 locals {
   location     = lookup(var.regions, var.loc, "uksouth")
   rg_name      = "rg-${var.short}-${var.loc}-${var.env}-mc-001"
-  daily_name   = "logic-${var.short}-${var.loc}-${var.env}-mc-001"
-  monthly_name = "logic-${var.short}-${var.loc}-${var.env}-mc-002"
+  daily_name   = "logic-${var.short}-${var.loc}-${var.env}-mc-daily-001"
+  monthly_name = "logic-${var.short}-${var.loc}-${var.env}-mc-monthly-001"
 
   graph          = "https://graph.microsoft.com/v1.0"
   graph_audience = "https://graph.microsoft.com"
@@ -179,91 +179,15 @@ resource "azurerm_logic_app_action_custom" "daily_foreach" {
   name         = "For_each_-_Create_a_ticket_for_each_new_message"
   logic_app_id = module.logic_app_workflow.ids[local.daily_name]
 
-  body = jsonencode({
-    description = "One Planner ticket per message that has no ticket yet (title starting with its MC id). Sequential on purpose: Planner dislikes concurrent writes and order keeps run history readable."
-    type        = "Foreach"
-    foreach     = "@body('${azurerm_logic_app_action_custom.daily_get_messages.name}')?['value']"
-    runtimeConfiguration = {
-      concurrency = { repetitions = 1 }
-    }
-    runAfter = {
-      (azurerm_logic_app_action_custom.daily_select_titles.name) = ["Succeeded"]
-    }
-    actions = {
-      "Filter_-_Tickets_already_carrying_this_MC_id" = {
-        description = "Existing titles that start with this message's MC id; empty means the ticket is missing."
-        type        = "Query"
-        inputs = {
-          from  = "@body('${azurerm_logic_app_action_custom.daily_select_titles.name}')"
-          where = "@startsWith(item(), items('For_each_-_Create_a_ticket_for_each_new_message')?['id'])"
-        }
-        runAfter = {}
-      }
-      "Condition_-_Only_when_no_ticket_exists_yet" = {
-        description = "The dedupe: re-seen messages fall through as no-ops, so the lookback overlap and reruns are safe."
-        type        = "If"
-        expression = {
-          and = [
-            { equals = ["@length(body('Filter_-_Tickets_already_carrying_this_MC_id'))", 0] }
-          ]
-        }
-        runAfter = {
-          "Filter_-_Tickets_already_carrying_this_MC_id" = ["Succeeded"]
-        }
-        actions = {
-          "HTTP_-_Create_the_Planner_ticket" = {
-            description = "The ticket itself: MC id prefixed title (the dedupe key) and Microsoft's action-required date as the due date when present."
-            type        = "Http"
-            inputs = {
-              method = "POST"
-              uri    = "${local.graph}/planner/tasks"
-              body = {
-                planId      = "@parameters('plan_id')"
-                bucketId    = "@parameters('bucket_id')"
-                title       = "@{items('For_each_-_Create_a_ticket_for_each_new_message')?['id']}: @{items('For_each_-_Create_a_ticket_for_each_new_message')?['title']}"
-                dueDateTime = "@items('For_each_-_Create_a_ticket_for_each_new_message')?['actionRequiredByDateTime']"
-              }
-              authentication = local.mi_auth
-              retryPolicy    = local.retry
-            }
-            runAfter = {}
-          }
-          "HTTP_-_Get_the_new_tickets_details_etag" = {
-            description = "Planner details writes need the current etag; a fresh task's details are read straight back for it."
-            type        = "Http"
-            inputs = {
-              method         = "GET"
-              uri            = "${local.graph}/planner/tasks/@{body('HTTP_-_Create_the_Planner_ticket')?['id']}/details"
-              authentication = local.mi_auth
-              retryPolicy    = local.retry
-            }
-            runAfter = {
-              "HTTP_-_Create_the_Planner_ticket" = ["Succeeded"]
-            }
-          }
-          "HTTP_-_Write_the_ticket_description" = {
-            description = "Fills the ticket description with the message metadata and the admin center deep link."
-            type        = "Http"
-            inputs = {
-              method = "PATCH"
-              uri    = "${local.graph}/planner/tasks/@{body('HTTP_-_Create_the_Planner_ticket')?['id']}/details"
-              headers = {
-                "If-Match" = "@body('HTTP_-_Get_the_new_tickets_details_etag')?['@odata.etag']"
-              }
-              body = {
-                description = "Services: @{join(coalesce(items('For_each_-_Create_a_ticket_for_each_new_message')?['services'], json('[]')), ', ')}${local.nl}Category: @{items('For_each_-_Create_a_ticket_for_each_new_message')?['category']}  Severity: @{items('For_each_-_Create_a_ticket_for_each_new_message')?['severity']}${local.nl}Last modified: @{items('For_each_-_Create_a_ticket_for_each_new_message')?['lastModifiedDateTime']}${local.nl}Admin center: ${local.admin_link}@{items('For_each_-_Create_a_ticket_for_each_new_message')?['id']}"
-                previewType = "description"
-              }
-              authentication = local.mi_auth
-              retryPolicy    = local.retry
-            }
-            runAfter = {
-              "HTTP_-_Get_the_new_tickets_details_etag" = ["Succeeded"]
-            }
-          }
-        }
-      }
-    }
+  # The nested body lives in a template so the structure stays readable; the only Terraform
+  # interpolation is structural (action names and Graph constants), per the Logic App standard.
+  body = templatefile("${path.module}/templates/daily-foreach-create-tickets.json.tftpl", {
+    self_name            = "For_each_-_Create_a_ticket_for_each_new_message"
+    get_messages_action  = azurerm_logic_app_action_custom.daily_get_messages.name
+    select_titles_action = azurerm_logic_app_action_custom.daily_select_titles.name
+    graph                = local.graph
+    graph_audience       = local.graph_audience
+    admin_link           = local.admin_link
   })
 }
 
@@ -382,67 +306,13 @@ resource "azurerm_logic_app_action_custom" "monthly_condition_create" {
   name         = "Condition_-_Only_when_this_months_rollup_is_missing"
   logic_app_id = module.logic_app_workflow.ids[local.monthly_name]
 
-  body = jsonencode({
-    description = "Creates the rollup ticket and writes its summary body, only once per month."
-    type        = "If"
-    expression = {
-      and = [
-        { equals = ["@length(body('${azurerm_logic_app_action_custom.monthly_filter_existing.name}'))", 0] }
-      ]
-    }
-    runAfter = {
-      (azurerm_logic_app_action_custom.monthly_filter_existing.name) = ["Succeeded"]
-    }
-    actions = {
-      "HTTP_-_Create_the_rollup_ticket" = {
-        description = "The single monthly rollup ticket."
-        type        = "Http"
-        inputs = {
-          method = "POST"
-          uri    = "${local.graph}/planner/tasks"
-          body = {
-            planId   = "@parameters('plan_id')"
-            bucketId = "@parameters('bucket_id')"
-            title    = "@outputs('${azurerm_logic_app_action_custom.monthly_compose_title.name}')"
-          }
-          authentication = local.mi_auth
-          retryPolicy    = local.retry
-        }
-        runAfter = {}
-      }
-      "HTTP_-_Get_the_rollup_tickets_details_etag" = {
-        description = "Planner details writes need the current etag."
-        type        = "Http"
-        inputs = {
-          method         = "GET"
-          uri            = "${local.graph}/planner/tasks/@{body('HTTP_-_Create_the_rollup_ticket')?['id']}/details"
-          authentication = local.mi_auth
-          retryPolicy    = local.retry
-        }
-        runAfter = {
-          "HTTP_-_Create_the_rollup_ticket" = ["Succeeded"]
-        }
-      }
-      "HTTP_-_Write_the_rollup_summary" = {
-        description = "One line per message from the Select, joined with newlines."
-        type        = "Http"
-        inputs = {
-          method = "PATCH"
-          uri    = "${local.graph}/planner/tasks/@{body('HTTP_-_Create_the_rollup_ticket')?['id']}/details"
-          headers = {
-            "If-Match" = "@body('HTTP_-_Get_the_rollup_tickets_details_etag')?['@odata.etag']"
-          }
-          body = {
-            description = "@{join(body('${azurerm_logic_app_action_custom.monthly_select_lines.name}'), decodeUriComponent('%0A'))}"
-            previewType = "description"
-          }
-          authentication = local.mi_auth
-          retryPolicy    = local.retry
-        }
-        runAfter = {
-          "HTTP_-_Get_the_rollup_tickets_details_etag" = ["Succeeded"]
-        }
-      }
-    }
+  # Template for the same reason as the daily foreach: nested structure reads as JSON, Terraform
+  # only wires the action names.
+  body = templatefile("${path.module}/templates/monthly-create-rollup.json.tftpl", {
+    filter_existing_action = azurerm_logic_app_action_custom.monthly_filter_existing.name
+    compose_title_action   = azurerm_logic_app_action_custom.monthly_compose_title.name
+    select_lines_action    = azurerm_logic_app_action_custom.monthly_select_lines.name
+    graph                  = local.graph
+    graph_audience         = local.graph_audience
   })
 }

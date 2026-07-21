@@ -1,0 +1,63 @@
+{
+  "description": "Creates the rollup ticket and writes its summary body, only once per month.",
+  "type": "If",
+  "expression": {
+    "and": [
+      { "equals": ["@length(body('${filter_existing_action}'))", 0] }
+    ]
+  },
+  "runAfter": {
+    "${filter_existing_action}": ["Succeeded"]
+  },
+  "actions": {
+    "HTTP_-_Create_the_rollup_ticket": {
+      "description": "The single monthly rollup ticket.",
+      "type": "Http",
+      "inputs": {
+        "method": "POST",
+        "uri": "${graph}/planner/tasks",
+        "body": {
+          "planId": "@parameters('plan_id')",
+          "bucketId": "@parameters('bucket_id')",
+          "title": "@outputs('${compose_title_action}')"
+        },
+        "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+        "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+      },
+      "runAfter": {}
+    },
+    "HTTP_-_Get_the_rollup_tickets_details_etag": {
+      "description": "Planner details writes need the current etag.",
+      "type": "Http",
+      "inputs": {
+        "method": "GET",
+        "uri": "${graph}/planner/tasks/@{body('HTTP_-_Create_the_rollup_ticket')?['id']}/details",
+        "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+        "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+      },
+      "runAfter": {
+        "HTTP_-_Create_the_rollup_ticket": ["Succeeded"]
+      }
+    },
+    "HTTP_-_Write_the_rollup_summary": {
+      "description": "One line per message from the Select, joined with newlines.",
+      "type": "Http",
+      "inputs": {
+        "method": "PATCH",
+        "uri": "${graph}/planner/tasks/@{body('HTTP_-_Create_the_rollup_ticket')?['id']}/details",
+        "headers": {
+          "If-Match": "@body('HTTP_-_Get_the_rollup_tickets_details_etag')?['@odata.etag']"
+        },
+        "body": {
+          "description": "@{join(body('${select_lines_action}'), decodeUriComponent('%0A'))}",
+          "previewType": "description"
+        },
+        "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+        "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+      },
+      "runAfter": {
+        "HTTP_-_Get_the_rollup_tickets_details_etag": ["Succeeded"]
+      }
+    }
+  }
+}

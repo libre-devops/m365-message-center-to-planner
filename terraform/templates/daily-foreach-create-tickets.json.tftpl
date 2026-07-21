@@ -1,0 +1,86 @@
+{
+  "description": "One Planner ticket per message that has no ticket yet (title starting with its MC id). Sequential on purpose: Planner dislikes concurrent writes and order keeps run history readable.",
+  "type": "Foreach",
+  "foreach": "@body('${get_messages_action}')?['value']",
+  "runtimeConfiguration": {
+    "concurrency": { "repetitions": 1 }
+  },
+  "runAfter": {
+    "${select_titles_action}": ["Succeeded"]
+  },
+  "actions": {
+    "Filter_-_Tickets_already_carrying_this_MC_id": {
+      "description": "Existing titles that start with this message's MC id; empty means the ticket is missing.",
+      "type": "Query",
+      "inputs": {
+        "from": "@body('${select_titles_action}')",
+        "where": "@startsWith(item(), items('${self_name}')?['id'])"
+      },
+      "runAfter": {}
+    },
+    "Condition_-_Only_when_no_ticket_exists_yet": {
+      "description": "The dedupe: re-seen messages fall through as no-ops, so the lookback overlap and reruns are safe.",
+      "type": "If",
+      "expression": {
+        "and": [
+          { "equals": ["@length(body('Filter_-_Tickets_already_carrying_this_MC_id'))", 0] }
+        ]
+      },
+      "runAfter": {
+        "Filter_-_Tickets_already_carrying_this_MC_id": ["Succeeded"]
+      },
+      "actions": {
+        "HTTP_-_Create_the_Planner_ticket": {
+          "description": "The ticket itself: MC id prefixed title (the dedupe key) and Microsoft's action-required date as the due date when present.",
+          "type": "Http",
+          "inputs": {
+            "method": "POST",
+            "uri": "${graph}/planner/tasks",
+            "body": {
+              "planId": "@parameters('plan_id')",
+              "bucketId": "@parameters('bucket_id')",
+              "title": "@{items('${self_name}')?['id']}: @{items('${self_name}')?['title']}",
+              "dueDateTime": "@items('${self_name}')?['actionRequiredByDateTime']"
+            },
+            "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+            "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+          },
+          "runAfter": {}
+        },
+        "HTTP_-_Get_the_new_tickets_details_etag": {
+          "description": "Planner details writes need the current etag; a fresh task's details are read straight back for it.",
+          "type": "Http",
+          "inputs": {
+            "method": "GET",
+            "uri": "${graph}/planner/tasks/@{body('HTTP_-_Create_the_Planner_ticket')?['id']}/details",
+            "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+            "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+          },
+          "runAfter": {
+            "HTTP_-_Create_the_Planner_ticket": ["Succeeded"]
+          }
+        },
+        "HTTP_-_Write_the_ticket_description": {
+          "description": "Fills the ticket description with the message metadata and the admin center deep link.",
+          "type": "Http",
+          "inputs": {
+            "method": "PATCH",
+            "uri": "${graph}/planner/tasks/@{body('HTTP_-_Create_the_Planner_ticket')?['id']}/details",
+            "headers": {
+              "If-Match": "@body('HTTP_-_Get_the_new_tickets_details_etag')?['@odata.etag']"
+            },
+            "body": {
+              "description": "Services: @{join(coalesce(items('${self_name}')?['services'], json('[]')), ', ')}@{decodeUriComponent('%0A')}Category: @{items('${self_name}')?['category']}  Severity: @{items('${self_name}')?['severity']}@{decodeUriComponent('%0A')}Last modified: @{items('${self_name}')?['lastModifiedDateTime']}@{decodeUriComponent('%0A')}Admin center: ${admin_link}@{items('${self_name}')?['id']}",
+              "previewType": "description"
+            },
+            "authentication": { "type": "ManagedServiceIdentity", "audience": "${graph_audience}" },
+            "retryPolicy": { "type": "fixed", "count": 3, "interval": "PT15S" }
+          },
+          "runAfter": {
+            "HTTP_-_Get_the_new_tickets_details_etag": ["Succeeded"]
+          }
+        }
+      }
+    }
+  }
+}
