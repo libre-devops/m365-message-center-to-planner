@@ -79,7 +79,11 @@ param(
     [string]$Tenant = $(if ($env:MC_TENANT) { $env:MC_TENANT } else { 'organizations' })
 )
 
-Set-StrictMode -Version Latest
+# StrictMode 1.0, deliberately not Latest: the script consumes dynamic Graph JSON where properties
+# are legitimately absent (ConvertFrom-Json only materialises what the reply contained), and 2.0+
+# turns every such access, and every synthetic .Count on a scalar, into a runtime error. 1.0 keeps
+# the protection that matters here (uninitialised variables) without the landmines.
+Set-StrictMode -Version 1.0
 $ErrorActionPreference = 'Stop'
 
 $script:GraphBase = 'https://graph.microsoft.com/v1.0'
@@ -335,8 +339,16 @@ function Get-GraphAll {
 
 # ---------------------------------------------------------------------------- filtering
 
+function Limit-Text {
+    param([string]$Text, [int]$Max)
+    if ($Text -and $Text.Length -gt $Max) { return $Text.Substring(0, $Max) }
+    return $Text
+}
+
 function Get-Period {
-    $supplied = @($Day, $Week, $Month, $Year) | Where-Object { $_ }
+    # @() around the pipeline matters: Where-Object returns a bare scalar when exactly one value
+    # matches, and a scalar has no .Count (caught live on the first Windows run).
+    $supplied = @(@($Day, $Week, $Month, $Year) | Where-Object { $_ })
     if ($supplied.Count -eq 0) { return $null }
     if ($supplied.Count -gt 1) { throw 'Use only one of -Day, -Week, -Month, -Year.' }
     $today = [DateTime]::UtcNow.Date
