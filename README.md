@@ -36,26 +36,32 @@ CLI: no app registration, no secrets, and your existing read access is exactly w
 
 ## Requirements
 
-- Azure CLI, signed in to the tenant: `az login` (check with `az account show`).
 - [`uv`](https://github.com/astral-sh/uv): the script carries inline dependency metadata, so
-  `uv run mc.py` resolves Typer on the fly. (Plain `python mc.py` also works if Typer is installed.)
+  `uv run mc.py` resolves its dependencies on the fly.
 - Reading messages: a Message Center capable admin role on your account (Message Center Reader is
   enough; Global Reader also works).
 - Posting to Planner: membership of the M365 group that owns the target plan.
-- If Graph returns 403 despite a valid role, the Azure CLI token is missing the delegated scopes
-  (decode it with `az account get-access-token --resource-type ms-graph` and inspect the `scp`
-  claim). Consent them once with a scoped login, after which every later `az rest` call carries
-  them:
 
-  ```bash
-  az login --scope https://graph.microsoft.com/ServiceMessage.Read.All   # reading messages
-  az login --scope https://graph.microsoft.com/Tasks.ReadWrite           # posting to Planner
-  ```
+## Signing in (two modes, both are you)
 
-  `.default` only returns scopes already consented, so it cannot add these. Tenants that require
-  admin consent for user grants will pop an approval flow instead; and some tenants restrict the
-  Azure CLI application's Graph access entirely, which is a tenant policy conversation rather than
-  a script fix.
+Both modes act as your signed-in user; there is no app registration and no secret anywhere.
+
+- **`--auth az`** (the default) rides the Azure CLI login through `az rest`. It only works if the
+  cached az token already carries the Graph scopes, which in practice it rarely does: the Azure CLI
+  is a Microsoft first-party application, and Microsoft only lets first-party apps request Graph
+  scopes it has preauthorized for them. `ServiceMessage.Read.All` and `Tasks.ReadWrite` are not on
+  the Azure CLI's list, so `az login --scope ...` for them dies with **AADSTS65002** in any tenant
+  (caught live; that error is the platform saying no, not your admins).
+- **`--auth device`** (or `export MC_AUTH=device`, which the justfile recipes pick up) is the
+  reliable mode: a device-code sign-in through the **Microsoft Graph Command Line Tools** public
+  client, the same first-party app `Connect-MgGraph` uses, which IS allowed to request these scopes.
+  First run prints a code and a URL, you approve it in a browser as yourself, and the token (with
+  refresh) is cached at `~/.config/m365-mc-planner/token-cache.json` so later runs are silent. Pass
+  `--tenant <id or domain>` (or `MC_TENANT`) to pin the tenant. Your tenant's consent policy still
+  applies: if user consent is restricted, the sign-in shows an admin approval flow instead.
+- The `plans` command additionally needs `Group.Read.All`, which many tenants gate behind admin
+  consent. If that is refused, skip `plans`: the plan id is right there in the Planner board URL
+  (the value after `/plan/` or the `planId` query parameter), and nothing else needs group reads.
 
 ## Filters (shared by messages, summarise, and post)
 

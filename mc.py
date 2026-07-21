@@ -1,14 +1,16 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["typer>=0.12"]
+# dependencies = ["typer>=0.12", "msal>=1.28"]
 # ///
 """Message Center CLI: read M365 Message Center posts and push them to Microsoft Planner.
 
-Every Microsoft Graph call is made through `az rest`, so the identity used is whoever is signed in
-to the Azure CLI (az login), never an app secret. Reading messages needs a Message Center capable
-role (Message Center Reader is enough); writing to Planner needs nothing beyond membership of the
-group that owns the plan.
+Always your own identity, never an app secret, via one of two modes (--auth, or MC_AUTH in the
+environment): az reuses the Azure CLI login through `az rest`, and device signs you in with a
+device code through the Microsoft Graph Command Line Tools public client. Use device when az mode
+403s: Microsoft does not let the Azure CLI app request these Graph scopes (AADSTS65002). Reading
+messages needs a Message Center capable role (Message Center Reader is enough); writing to Planner
+needs nothing beyond membership of the group that owns the plan.
 
 Commands:
   messages   List Message Center posts, filtered by service, category, severity, and time.
@@ -25,6 +27,9 @@ import html
 import json
 import re
 import subprocess
+import urllib.error
+import urllib.request
+from pathlib import Path
 from collections import Counter
 from typing import List, Optional
 
@@ -32,6 +37,22 @@ import typer
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 ADMIN_LINK = "https://admin.microsoft.com/#/MessageCenter/:/messages/{id}"
+
+# The Microsoft Graph Command Line Tools public client (the app Connect-MgGraph uses). Unlike the
+# Azure CLI's first-party app, it is allowed to request these delegated Graph scopes dynamically,
+# so device auth works where az scoped logins die with AADSTS65002 (Microsoft first-party apps can
+# only request scopes Microsoft preauthorized for them, and these are not among the Azure CLI's).
+GRAPH_CLI_APP = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
+DEVICE_SCOPES = ["ServiceMessage.Read.All", "Tasks.ReadWrite", "Group.Read.All"]
+TOKEN_CACHE = Path.home() / ".config" / "m365-mc-planner" / "token-cache.json"
+
+
+class Auth:
+    """Process-wide auth selection, set by the root callback before any command runs."""
+
+    mode = "az"
+    tenant = "organizations"
+    _token: Optional[str] = None
 
 # Short names for the services people actually say, mapped to substrings matched (case-insensitive)
 # against the message's services list. Anything not in this table is used as a raw substring, so
@@ -72,10 +93,32 @@ app = typer.Typer(
 )
 
 
+@app.callback()
+def _root(
+    auth: str = typer.Option(
+        "az",
+        "--auth",
+        envvar="MC_AUTH",
+        help="az (reuse the Azure CLI identity) or device (device-code sign-in via the Microsoft Graph Command Line Tools public client; use this when az scoped logins fail with AADSTS65002).",
+    ),
+    tenant: str = typer.Option(
+        "organizations",
+        "--tenant",
+        envvar="MC_TENANT",
+        help="Tenant id or domain for device auth (device mode only).",
+    ),
+):
+    if auth not in ("az", "device"):
+        typer.secho("--auth must be az or device.", fg="red", err=True)
+        raise typer.Exit(2)
+    Auth.mode = auth
+    Auth.tenant = tenant
+
+
 # ---------------------------------------------------------------------------- az plumbing
 
 
-def az_rest(method: str, url: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Optional[dict]:
+def _az_rest(method: str, url: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Optional[dict]:
     """Call Microsoft Graph through `az rest` and return the parsed JSON (None for empty replies)."""
     cmd = ["az", "rest", "--method", method, "--url", url, "--output", "json"]
     if body is not None:
@@ -92,31 +135,92 @@ def az_rest(method: str, url: str, body: Optional[dict] = None, headers: Optiona
         typer.secho(f"Graph call failed: {method.upper()} {url}", fg="red", err=True)
         typer.secho(err[:2000], err=True)
         if "403" in err or "Forbidden" in err or "Insufficient privileges" in err or "UnknownError" in err:
-            typer.secho(
-                "\nThis is a permissions problem, not a script problem. Check that:\n"
-                "  1. You are logged in to the right tenant: az account show\n"
-                "  2. Reading messages: your account holds a Message Center capable admin role\n"
-                "     (Message Center Reader is enough).\n"
-                "  3. Posting to Planner: you are a member of the group that owns the plan.\n"
-                "  4. If the token itself lacks the Graph scopes (decode: az account\n"
-                "     get-access-token --resource-type ms-graph, check the scp claim), consent\n"
-                "     them once with a scoped login:\n"
-                "     az login --scope https://graph.microsoft.com/ServiceMessage.Read.All\n"
-                "     az login --scope https://graph.microsoft.com/Tasks.ReadWrite\n"
-                "     (.default only returns scopes already consented; it cannot add new ones.)",
-                fg="yellow",
-                err=True,
-            )
+            _permission_hint()
         raise typer.Exit(1)
     out = proc.stdout.strip()
     return json.loads(out) if out else None
 
 
+
+
+def _device_token() -> str:
+    """Delegated token via the device-code flow, cached (with refresh) on disk between runs."""
+    if Auth._token:
+        return Auth._token
+    import msal
+
+    TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    cache = msal.SerializableTokenCache()
+    if TOKEN_CACHE.exists():
+        cache.deserialize(TOKEN_CACHE.read_text())
+    pca = msal.PublicClientApplication(
+        GRAPH_CLI_APP, authority=f"https://login.microsoftonline.com/{Auth.tenant}", token_cache=cache
+    )
+    result = None
+    accounts = pca.get_accounts()
+    if accounts:
+        result = pca.acquire_token_silent(DEVICE_SCOPES, account=accounts[0])
+    if not result:
+        flow = pca.initiate_device_flow(scopes=DEVICE_SCOPES)
+        if "user_code" not in flow:
+            typer.secho(f"Could not start the device flow: {flow.get('error_description', flow)}", fg="red", err=True)
+            raise typer.Exit(1)
+        typer.secho(flow["message"], fg="cyan", err=True)
+        result = pca.acquire_token_by_device_flow(flow)
+    if "access_token" not in result:
+        typer.secho(f"Sign-in failed: {result.get('error_description', result.get('error'))}", fg="red", err=True)
+        raise typer.Exit(1)
+    if cache.has_state_changed:
+        TOKEN_CACHE.write_text(cache.serialize())
+        TOKEN_CACHE.chmod(0o600)
+    Auth._token = result["access_token"]
+    return Auth._token
+
+
+def _permission_hint() -> None:
+    typer.secho(
+        "\nThis is a permissions problem, not a script problem. Check that:\n"
+        "  1. You are signed in to the right tenant (az account show, or --tenant for device auth).\n"
+        "  2. Reading messages: your account holds a Message Center capable admin role\n"
+        "     (Message Center Reader is enough).\n"
+        "  3. Posting to Planner: you are a member of the group that owns the plan.\n"
+        "  4. In az mode a 403 usually means the Azure CLI token lacks the Graph scopes, and\n"
+        "     Microsoft does not let the az app request them (AADSTS65002). Switch to device auth,\n"
+        "     which signs in as you through the Microsoft Graph Command Line Tools client:\n"
+        "     mc.py --auth device <command> ...   (or export MC_AUTH=device)",
+        fg="yellow",
+        err=True,
+    )
+
+
+def graph_call(method: str, url: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Optional[dict]:
+    """Call Graph with whichever identity source --auth selected."""
+    if Auth.mode == "az":
+        return _az_rest(method, url, body=body, headers=headers)
+    token = _device_token()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, method=method.upper(), data=data)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            text = resp.read().decode()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode(errors="replace")
+        typer.secho(f"Graph call failed ({e.code}): {method.upper()} {url}", fg="red", err=True)
+        typer.secho(detail[:2000], err=True)
+        if e.code == 403:
+            _permission_hint()
+        raise typer.Exit(1)
+    return json.loads(text) if text else None
+
 def graph_get_all(url: str) -> List[dict]:
     """GET a Graph collection, following @odata.nextLink until exhausted."""
     items: List[dict] = []
     while url:
-        page = az_rest("get", url) or {}
+        page = graph_call("get", url) or {}
         items.extend(page.get("value", []))
         url = page.get("@odata.nextLink")
     return items
@@ -457,7 +561,7 @@ def post(
             typer.echo(f"[dry-run] would create bucket '{bucket_name}'")
             bucket = {"id": "(new)"}
         else:
-            bucket = az_rest("post", f"{GRAPH}/planner/buckets", body={"name": bucket_name, "planId": plan_id, "orderHint": " !"})
+            bucket = graph_call("post", f"{GRAPH}/planner/buckets", body={"name": bucket_name, "planId": plan_id, "orderHint": " !"})
             typer.secho(f"Created bucket '{bucket_name}'.", fg="green")
 
     def create_task(title: str, description: str, due: Optional[str]):
@@ -467,9 +571,9 @@ def post(
         body = {"planId": plan_id, "bucketId": bucket["id"], "title": title}
         if due:
             body["dueDateTime"] = due
-        task = az_rest("post", f"{GRAPH}/planner/tasks", body=body)
-        details = az_rest("get", f"{GRAPH}/planner/tasks/{task['id']}/details")
-        az_rest(
+        task = graph_call("post", f"{GRAPH}/planner/tasks", body=body)
+        details = graph_call("get", f"{GRAPH}/planner/tasks/{task['id']}/details")
+        graph_call(
             "patch",
             f"{GRAPH}/planner/tasks/{task['id']}/details",
             body={"description": description, "previewType": "description"},
